@@ -6,7 +6,6 @@ from sklearn.preprocessing import OrdinalEncoder
 from sklearn.ensemble import GradientBoostingClassifier
 from imblearn.pipeline import Pipeline  
 from imblearn.over_sampling import SMOTE
-from sklearn.preprocessing import LabelEncoder
 
 
 def train(X_train, y_train):
@@ -42,23 +41,16 @@ def train(X_train, y_train):
     # Use imblearn Pipeline to include SMOTE
     pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
-        # ('smote', SMOTE(random_state=42)),
+        ('smote', SMOTE(random_state=42)),
         ('classifier', GradientBoostingClassifier())
     ])
 
-    # Train
     
-    # target_encoder = LabelEncoder()
-    # y_train = target_encoder.fit_transform(y_train)
 
-    # X_res, y_res = SMOTE(random_state=42).fit_resample(X_train, y_train)
     pipeline.fit(X_train, y_train)
 
     with open('models/churn.pkl', 'wb') as f:
         pickle.dump(pipeline, f)
-
-    # with open(r'D:\ITI\1_etisalt\Etisalat\churn\models\churn.pkl', "wb") as f:
-    #     pickle.dump({"model": pipeline, "target_encoder": target_encoder}, f)
 
     print("Model saved as churn_model.pkl")
     
