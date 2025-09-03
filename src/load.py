@@ -7,10 +7,12 @@ def load_data(path:str):
 
     df = pd.read_csv(path)
         
-    y = df["Churn"]
-    target_encoder = LabelEncoder()
-    y = target_encoder.fit_transform(y) 
+    # y = df["Churn"]
+    # target_encoder = LabelEncoder()
+    # y = target_encoder.fit_transform(y) 
+    # Manual mapping
 
+    y = df["Churn"].map({"No": 0, "Yes": 1})
 
     X = df.drop(columns=["Churn", "customerID","gender",'Dual','Phone_Service'])
     
