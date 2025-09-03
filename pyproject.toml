@@ -1,38 +1,20 @@
-[build-system]
-requires = ["flit_core >=3.2,<4"]
-build-backend = "flit_core.buildapi"
-
 [project]
-name = "churn"
+name = "src"
 version = "0.0.1"
 description = "A short description of the project."
-authors = [
-  { name = "raghad" },
-]
-
+authors = [{ name = "raghad" }]
 readme = "README.md"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    
-]
+classifiers = ["Programming Language :: Python :: 3"]
 dependencies = [
     "awscli",
+    "ipykernel>=6.30.1",
+    "matplotlib>=3.10.6",
+    "pandas>=2.3.2",
     "pip",
     "python-dotenv",
     "ruff",
+    "scikit-learn>=1.7.1",
+    "seaborn>=0.13.2", # <- now you can add it here
+    "imbalanced-learn",
 ]
 requires-python = "~=3.10.0"
-
-
-[tool.ruff]
-line-length = 99
-src = ["churn"]
-include = ["pyproject.toml", "churn/**/*.py"]
-
-[tool.ruff.lint]
-extend-select = ["I"]  # Add import sorting
-
-[tool.ruff.lint.isort]
-known-first-party = ["churn"]
-force-sort-within-sections = true
-
