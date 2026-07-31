@@ -1,8 +1,8 @@
 import streamlit as st
 
-st.set_page_config(page_title="📘 Churn Prediction Guide", layout="centered")
+st.set_page_config(page_title=" Churn Prediction Guide", layout="centered")
 
-st.title("📘 How to Ask About Churn Prediction")
+st.title(" How to Ask About Churn Prediction")
 st.write(
     "This assistant predicts whether a customer is at risk of churn. "
     "You can provide details in **natural language** or as **JSON**. "
@@ -11,7 +11,7 @@ st.write(
 
 st.divider()
 
-tab1, tab2, tab3 = st.tabs(["🗣️ Natural Language Example", "🧱 JSON Example", "📚 Field Reference"])
+tab1, tab2, tab3 = st.tabs([" Natural Language Example", " JSON Example", " Field Reference"])
 
 with tab1:
     st.subheader("Natural language prompt (copy & paste)")
@@ -85,5 +85,5 @@ with tab3:
 
 st.divider()
 st.info(
-    "✅ You can use either format. The main assistant page will parse your input and return the prediction and confidence."
+    "You can use either format. The main assistant page will parse your input and return the prediction and confidence."
 )

@@ -20,5 +20,6 @@ dependencies = [
     "langchain>=0.3.27",
     "langchain-google-genai>=2.1.10",
     "xgboost>=3.0.5",
+    "langchain-ollama>=0.3.10",
 ]
 requires-python = "~=3.10.0"

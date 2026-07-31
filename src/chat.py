@@ -1,171 +1,85 @@
-import os
-import asyncio
+
+# uv run python -m streamlit run .\src\chat.py
 import pickle
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
+from langchain_ollama import ChatOllama
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.tools import tool
+from typing import Optional
 
-# LangChain integrations
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain.agents import initialize_agent, Tool
+st.title("Marketing Assistant with Churn Prediction")
 
-import json
-
-# --------------------------
-# Setup
-# --------------------------
-load_dotenv()
-st.title("📊 Marketing Assistant with Churn Prediction")
-
-google_api_key = os.getenv("GOOGLE_API_KEY")
-chat_model_name = "models/gemini-2.0-flash-lite-preview"
-
-# Ensure event loop exists
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
-# --------------------------
-# Load your churn model
-# --------------------------
 with open("models/churn.pkl", "rb") as f:
     churn_model = pickle.load(f)
 
-# --------------------------
-# Prediction function
-# --------------------------
-def predict_churn(data):
-    try:
-        # Parse input
-        if isinstance(data, str):
-            data = json.loads(data)
 
-        EXPECTED_COLS = [
-            'Senior_Citizen', 'Is_Married', 'Dependents', 'tenure',
-            'Internet_Service', 'Online_Security', 'Online_Backup',
-            'Device_Protection', 'Tech_Support', 'Streaming_TV',
-            'Streaming_Movies', 'Contract', 'Paperless_Billing',
-            'Payment_Method', 'Monthly_Charges', 'Total_Charges'
-        ]
+@tool
+def predict_churn(tenure: Optional[int] = None, Monthly_Charges: Optional[float] = None,
+                   Total_Charges: Optional[float] = None, Is_Married: Optional[str] = None,
+                   Dependents: Optional[str] = None, Paperless_Billing: Optional[str] = None,
+                   Streaming_TV: Optional[str] = None, Streaming_Movies: Optional[str] = None,
+                   Online_Security: Optional[str] = None, Online_Backup: Optional[str] = None,
+                   Device_Protection: Optional[str] = None, Tech_Support: Optional[str] = None,
+                   Payment_Method: Optional[str] = None, Internet_Service: Optional[str] = None,
+                   Contract: Optional[str] = None) -> dict:
+    """Predict whether a customer will churn. Yes/No fields must be the
+    exact string "Yes" or "No" (not true/false). Call this only once you
+    have values for every field."""
+    args = locals()
+    missing = [k for k, v in args.items() if v is None]
+    if missing:
+        return {"error": f"Missing required fields: {missing}. Ask the user for these before retrying."}
 
-        df = pd.DataFrame([data])
-        df = df[EXPECTED_COLS]
+    row = pd.DataFrame([args])
+    proba = churn_model.predict_proba(row)[0]
+    return {
+        "prediction": "Yes" if proba[1] >= 0.5 else "No",
+        "probabilities": {"No": float(proba[0]), "Yes": float(proba[1])},
+        "confidence": float(max(proba)),
+    }
 
-        # Fix numeric fields
-        for col in ['Senior_Citizen', 'tenure', 'Monthly_Charges', 'Total_Charges']:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # Prediction
-        pred = churn_model.predict(df)[0]
-        proba = churn_model.predict_proba(df)[0] if hasattr(churn_model, "predict_proba") else None
+def render_report(result: dict):
+    st.subheader("Churn Prediction Report")
+    st.write(f"**Prediction:** {result['prediction']}")
+    st.write(f"**Confidence:** {result['confidence']:.2%}")
+    st.bar_chart(result["probabilities"])
 
-        target_map = {0: "No", 1: "Yes"}
-        pred_label = target_map.get(pred, str(pred))
 
-        return {
-            "prediction": pred_label,
-            "probabilities": {
-                "No": float(proba[0]) if proba is not None else None,
-                "Yes": float(proba[1]) if proba is not None else None,
-            },
-            "confidence": float(proba[pred]) if proba is not None else None,
-            "inputs": data
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
-
-# --------------------------
-# Wrap model as tool
-# --------------------------
-tools = [
-    Tool(
-        name="Churn Predictor",
-        func=predict_churn,
-        description=(
-            "Predict if a customer will churn. "
-            "Provide details as a JSON dict with keys: "
-            "'Senior_Citizen', 'Is_Married', 'Dependents', 'tenure', "
-            "'Internet_Service', 'Online_Security', 'Online_Backup', "
-            "'Device_Protection', 'Tech_Support', 'Streaming_TV', "
-            "'Streaming_Movies', 'Contract', 'Paperless_Billing', "
-            "'Payment_Method', 'Monthly_Charges', 'Total_Charges'."
-        )
-    )
-]
-
-# --------------------------
-# Session state for messages
-# --------------------------
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-    st.session_state.messages.append(SystemMessage(
-        "You are a marketing assistant. "
-        "If the user asks about churn prediction, use the Churn Predictor tool "
-        "and return a full churn report. Otherwise, answer normally."
-    ))
+    st.session_state.messages = [SystemMessage(
+        "You are a marketing assistant. Use predict_churn for churn questions; "
+        "ask for any missing fields first."
+    )]
 
-# --------------------------
-# Display previous messages
-# --------------------------
-for message in st.session_state.messages:
-    if isinstance(message, HumanMessage):
-        with st.chat_message("user"):
-            st.markdown(message.content)
-    elif isinstance(message, AIMessage):
-        with st.chat_message("assistant"):
-            st.markdown(message.content)
+for msg in st.session_state.messages:
+    if isinstance(msg, HumanMessage):
+        st.chat_message("user").markdown(msg.content)
+    elif isinstance(msg, AIMessage) and msg.content:
+        st.chat_message("assistant").markdown(msg.content)
 
-# --------------------------
-# Chat input
-# --------------------------
-prompt = st.chat_input("Ask about churn or marketing insights...")
-
-if prompt:
-    # Add user input
-    with st.chat_message("user"):
-        st.markdown(prompt)
+if prompt := st.chat_input("Ask about churn or marketing insights..."):
+    st.chat_message("user").markdown(prompt)
     st.session_state.messages.append(HumanMessage(prompt))
 
-    # Create LLM + Agent
-    model_llm = ChatGoogleGenerativeAI(
-        model=chat_model_name,
-        temperature=0,
-        google_api_key=google_api_key
-    )
+    llm = ChatOllama(model="qwen2.5:3b-instruct", temperature=0).bind_tools([predict_churn])
 
-    agent = initialize_agent(
-        tools=tools,
-        llm=model_llm,
-        agent="zero-shot-react-description",
-        verbose=True,
-        handle_parsing_errors=True
-    )
-
-    # Run agent
-    result = agent.run(prompt)
-
-    # Display response
     with st.chat_message("assistant"):
-        if isinstance(result, dict) and "prediction" in result:
-            st.subheader("🔮 Churn Prediction Report")
-            st.write(f"**Prediction:** {result['prediction']}")
-            st.write(f"**Confidence:** {result['confidence']:.2f}" if result["confidence"] else "N/A")
+        with st.spinner("Thinking..."):
+            reply = llm.invoke(st.session_state.messages)
+        st.session_state.messages.append(reply)
 
-            # Probability breakdown
-            st.write("### Probability Breakdown")
-            st.table(pd.DataFrame([result["probabilities"]]))
+        if reply.tool_calls:
+            call = reply.tool_calls[0]
+            result = predict_churn.invoke(call["args"])
+            st.session_state.messages.append(ToolMessage(str(result), tool_call_id=call["id"]))
 
-            # Customer inputs
-            st.write("### Customer Details")
-            st.json(result["inputs"])
+            if "error" not in result:
+                render_report(result)
 
-            # Bar chart
-            if result["probabilities"]["No"] is not None:
-                st.bar_chart(result["probabilities"])
+            summary = llm.invoke(st.session_state.messages)
+            st.markdown(summary.content)
+            st.session_state.messages.append(summary)
         else:
-            st.markdown(result)
-
-    st.session_state.messages.append(AIMessage(str(result)))
+            st.markdown(reply.content)

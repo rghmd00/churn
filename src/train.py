@@ -1,314 +1,105 @@
+import os
 import pickle
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
 from sklearn.impute import SimpleImputer
-from imblearn.pipeline import Pipeline  
-from imblearn.over_sampling import SMOTE
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, classification_report
 from xgboost import XGBClassifier
 
 
-def train(X_train, y_train):
+def train(X_train, y_train, model_path='models/churn.pkl'):
+    # Work on a copy so we don't mutate the caller's DataFrame
+    X_train = X_train.copy()
 
+    numeric_cols = ['tenure', 'Monthly_Charges', 'Total_Charges']
     binary_cols = ['Is_Married', 'Dependents', 'Paperless_Billing']
     service_cols = ["Streaming_TV", "Streaming_Movies", "Online_Security",
-                    "Online_Backup", "Device_Protection", "Tech_Support"]
-    ordinal_cols = ['Payment_Method', 'Internet_Service', 'Contract']
-    numeric_cols = ['tenure', 'Monthly_Charges', 'Total_Charges']
+                     "Online_Backup", "Device_Protection", "Tech_Support"]
+    nominal_cols = ['Payment_Method', 'Internet_Service', 'Contract']
 
-    for col in numeric_cols:
-        X_train[col] = pd.to_numeric(X_train[col], errors='coerce')
-        X_train[col] = X_train[col].fillna(0)
+    # Coerce numeric columns; leave NaNs for the imputer to handle properly
+    X_train[numeric_cols] = X_train[numeric_cols].apply(pd.to_numeric, errors='coerce')
 
-    # Define encoders with fixed categories
-    payment_categories = [["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"]]
-    payment_encoder = Pipeline([
+    # Numeric pipeline: median impute (don't silently zero-fill)
+    numeric_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median"))
+    ])
+
+    # Binary/ordinal-ish categoricals
+    binary_pipeline = Pipeline([
         ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OrdinalEncoder(categories=payment_categories, handle_unknown="use_encoded_value", unknown_value=-1))
+        ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
     ])
 
-    internet_encoder = Pipeline([
+    # Service columns (also effectively categorical, low cardinality)
+    service_pipeline = Pipeline([
         ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OrdinalEncoder(categories=[["No", "DSL", "Fiber optic"]], handle_unknown="use_encoded_value", unknown_value=-1))
+        ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
     ])
 
-    contract_encoder = Pipeline([
+    # Nominal columns with no inherent order -> one-hot instead of ordinal
+    nominal_pipeline = Pipeline([
         ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OrdinalEncoder(categories=[["Month-to-month", "One year", "Two year"]], handle_unknown="use_encoded_value", unknown_value=-1))
+        ("encoder", OneHotEncoder(handle_unknown="ignore"))
     ])
 
-    # Build ordinal pipeline
-    ordinal_pipeline = ColumnTransformer([
-        ('payment', payment_encoder, ['Payment_Method']),
-        ('internet', internet_encoder, ['Internet_Service']),
-        ('contract', contract_encoder, ['Contract'])
+    preprocessor = ColumnTransformer([
+        ('numeric', numeric_pipeline, numeric_cols),
+        ('binary', binary_pipeline, binary_cols),
+        ('service', service_pipeline, service_cols),
+        ('nominal', nominal_pipeline, nominal_cols),
     ])
 
-    # Preprocessor with imputers for all categorical cols
-    preprocessor = ColumnTransformer(transformers=[
-        ('binary', Pipeline([
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
-        ]), binary_cols),
+    # Train/validation split for early stopping + evaluation
+    X_tr, X_val, y_tr, y_val = train_test_split(
+        X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
+    )
+    n_pos = (y_tr == 1).sum()
+    n_neg = (y_tr == 0).sum()   
+    raw_ratio = (n_neg / n_pos) if n_pos > 0 else 1.0
 
-        ('service', Pipeline([
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
-        ]), service_cols),
+    # Soften the imbalance correction — full ratio overcorrects for recall
+    # at a steep cost to precision (roughly half of "Yes" predictions were
+    # false positives at the raw ratio). sqrt dampens this while still
+    # giving churners meaningfully more weight than a ratio of 1.0 would.
+    scale_pos_weight = raw_ratio ** 0.5
 
-        ('ordinal', ordinal_pipeline, ordinal_cols),
-    ])
+    classifier = XGBClassifier(
+        n_estimators=300,
+        learning_rate=0.1,
+        max_depth=5,
+        scale_pos_weight=scale_pos_weight,
+        random_state=42,
+        eval_metric="logloss",
+        early_stopping_rounds=20,
+    )
 
-    # Calculate imbalance ratio for scale_pos_weight
-    neg, pos = (y_train == 0).sum(), (y_train == 1).sum()
-    scale_pos_weight = neg / pos if pos > 0 else 1
+    preprocessor.fit(X_tr)
+    X_tr_enc = preprocessor.transform(X_tr)
+    X_val_enc = preprocessor.transform(X_val)
 
-    # Use imblearn Pipeline to include SMOTE if needed
-    pipeline = Pipeline(steps=[
+    classifier.fit(
+        X_tr_enc, y_tr,
+        eval_set=[(X_val_enc, y_val)],
+        verbose=False
+    )
+
+    pipeline = Pipeline([
         ('preprocessor', preprocessor),
-        # Uncomment SMOTE if imbalance is very severe
-        # ('smote', SMOTE(random_state=42)),
-        ('classifier', XGBClassifier(
-            n_estimators=300,
-            learning_rate=0.1,
-            max_depth=5,
-            random_state=42,
-            use_label_encoder=False,
-            eval_metric="logloss",
-            scale_pos_weight=scale_pos_weight  # handle imbalance
-        ))
+        ('classifier', classifier)
     ])
 
-    
+    val_preds = classifier.predict(X_val_enc)
+    val_probs = classifier.predict_proba(X_val_enc)[:, 1]
+    print(f"Validation AUC: {roc_auc_score(y_val, val_probs):.4f}")
+    print(classification_report(y_val, val_preds))
 
-    pipeline.fit(X_train, y_train)
-
-    with open('models/churn.pkl', 'wb') as f:
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    with open(model_path, 'wb') as f:
         pickle.dump(pipeline, f)
 
-    print("Model saved as churn.pkl")
-
-# import pickle
-# import pandas as pd
-# from sklearn.compose import ColumnTransformer
-# from sklearn.preprocessing import OrdinalEncoder
-# from sklearn.impute import SimpleImputer
-# from sklearn.ensemble import AdaBoostClassifier
-# from imblearn.pipeline import Pipeline  
-# from imblearn.over_sampling import SMOTE
-
-
-# def train(X_train, y_train):
-
-#     binary_cols = ['Is_Married', 'Dependents', 'Paperless_Billing']
-#     service_cols = ["Streaming_TV", "Streaming_Movies", "Online_Security",
-#                     "Online_Backup", "Device_Protection", "Tech_Support"]
-#     ordinal_cols = ['Payment_Method', 'Internet_Service', 'Contract']
-#     numeric_cols = ['tenure', 'Monthly_Charges', 'Total_Charges']
-
-#     for col in numeric_cols:
-#         X_train[col] = pd.to_numeric(X_train[col], errors='coerce')
-#         X_train[col] = X_train[col].fillna(0)
-
-#     # Define encoders with fixed categories
-#     payment_categories = [["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"]]
-#     payment_encoder = Pipeline([
-#         ("imputer", SimpleImputer(strategy="most_frequent")),
-#         ("encoder", OrdinalEncoder(categories=payment_categories, handle_unknown="use_encoded_value", unknown_value=-1))
-#     ])
-
-#     internet_encoder = Pipeline([
-#         ("imputer", SimpleImputer(strategy="most_frequent")),
-#         ("encoder", OrdinalEncoder(categories=[["No", "DSL", "Fiber optic"]], handle_unknown="use_encoded_value", unknown_value=-1))
-#     ])
-
-#     contract_encoder = Pipeline([
-#         ("imputer", SimpleImputer(strategy="most_frequent")),
-#         ("encoder", OrdinalEncoder(categories=[["Month-to-month", "One year", "Two year"]], handle_unknown="use_encoded_value", unknown_value=-1))
-#     ])
-
-#     # Build ordinal pipeline
-#     ordinal_pipeline = ColumnTransformer([
-#         ('payment', payment_encoder, ['Payment_Method']),
-#         ('internet', internet_encoder, ['Internet_Service']),
-#         ('contract', contract_encoder, ['Contract'])
-#     ])
-
-#     # Preprocessor with imputers for all categorical cols
-#     preprocessor = ColumnTransformer(transformers=[
-#         ('binary', Pipeline([
-#             ("imputer", SimpleImputer(strategy="most_frequent")),
-#             ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
-#         ]), binary_cols),
-
-#         ('service', Pipeline([
-#             ("imputer", SimpleImputer(strategy="most_frequent")),
-#             ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
-#         ]), service_cols),
-
-#         ('ordinal', ordinal_pipeline, ordinal_cols),
-#     ])
-
-#     # Use imblearn Pipeline to include SMOTE if needed
-#     pipeline = Pipeline(steps=[
-#         ('preprocessor', preprocessor),
-#         # Uncomment SMOTE if imbalance is severe
-#         # ('smote', SMOTE(random_state=42)),
-#         ('classifier', AdaBoostClassifier(random_state=42, n_estimators=200))
-#     ])
-
-#     pipeline.fit(X_train, y_train)
-
-#     with open('models/churn.pkl', 'wb') as f:
-#         pickle.dump(pipeline, f)
-
-#     print("Model saved as churn.pkl")
-
-
-
-
-# import pickle
-
-# import pandas as pd
-# from sklearn.compose import ColumnTransformer
-# from sklearn.preprocessing import OrdinalEncoder
-# from sklearn.impute import SimpleImputer
-# from sklearn.ensemble import GradientBoostingClassifier
-# from imblearn.pipeline import Pipeline  
-# from imblearn.over_sampling import SMOTE
-
-
-# def train(X_train, y_train):
-
-#     binary_cols = ['Is_Married', 'Dependents', 'Paperless_Billing']
-#     service_cols = ["Streaming_TV", "Streaming_Movies", "Online_Security",
-#                     "Online_Backup", "Device_Protection", "Tech_Support"]
-#     ordinal_cols = ['Payment_Method', 'Internet_Service', 'Contract']
-#     numeric_cols = ['tenure', 'Monthly_Charges', 'Total_Charges']
-
-#     for col in numeric_cols:
-#         X_train[col] = pd.to_numeric(X_train[col], errors='coerce')
-#         X_train[col] = X_train[col].fillna(0)
-
-#     # Define encoders with fixed categories
-#     payment_categories = [["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"]]
-#     payment_encoder = Pipeline([
-#         ("imputer", SimpleImputer(strategy="most_frequent")),
-#         ("encoder", OrdinalEncoder(categories=payment_categories, handle_unknown="use_encoded_value", unknown_value=-1))
-#     ])
-
-#     internet_encoder = Pipeline([
-#         ("imputer", SimpleImputer(strategy="most_frequent")),
-#         ("encoder", OrdinalEncoder(categories=[["No", "DSL", "Fiber optic"]], handle_unknown="use_encoded_value", unknown_value=-1))
-#     ])
-
-#     contract_encoder = Pipeline([
-#         ("imputer", SimpleImputer(strategy="most_frequent")),
-#         ("encoder", OrdinalEncoder(categories=[["Month-to-month", "One year", "Two year"]], handle_unknown="use_encoded_value", unknown_value=-1))
-#     ])
-
-#     # Build ordinal pipeline
-#     ordinal_pipeline = ColumnTransformer([
-#         ('payment', payment_encoder, ['Payment_Method']),
-#         ('internet', internet_encoder, ['Internet_Service']),
-#         ('contract', contract_encoder, ['Contract'])
-#     ])
-
-#     # Preprocessor with imputers for all categorical cols
-#     preprocessor = ColumnTransformer(transformers=[
-#         ('binary', Pipeline([
-#             ("imputer", SimpleImputer(strategy="most_frequent")),
-#             ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
-#         ]), binary_cols),
-
-#         ('service', Pipeline([
-#             ("imputer", SimpleImputer(strategy="most_frequent")),
-#             ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
-#         ]), service_cols),
-
-#         ('ordinal', ordinal_pipeline, ordinal_cols),
-#     ])
-
-#     # Use imblearn Pipeline to include SMOTE
-#     pipeline = Pipeline(steps=[
-#         ('preprocessor', preprocessor),
-#         # ('smote', SMOTE(random_state=42)),
-#         ('classifier', GradientBoostingClassifier())
-#     ])
-
-#     pipeline.fit(X_train, y_train)
-
-#     with open('models/churn.pkl', 'wb') as f:
-#         pickle.dump(pipeline, f)
-
-#     print("Model saved as churn.pkl")
-
-
-
-
-
-
-
-
-
-
-
-
-
-# import os
-# import pickle
-# import pandas as pd
-# from sklearn.compose import ColumnTransformer
-# from sklearn.preprocessing import OrdinalEncoder
-# from sklearn.ensemble import GradientBoostingClassifier
-# from imblearn.pipeline import Pipeline  
-# from imblearn.over_sampling import SMOTE
-
-
-# def train(X_train, y_train):
-
-#     binary_cols = ['Is_Married', 'Dependents', 'Paperless_Billing']
-#     service_cols = ["Streaming_TV", "Streaming_Movies", "Online_Security",
-#                     "Online_Backup", "Device_Protection", "Tech_Support"]
-#     ordinal_cols = ['Payment_Method', 'Internet_Service', 'Contract']
-#     numeric_cols = ['tenure', 'Monthly_Charges', 'Total_Charges']
-
-#     for col in numeric_cols:
-#         X_train[col] = pd.to_numeric(X_train[col], errors='coerce')
-#         X_train[col] = X_train[col].fillna(0)
-
-#     # Define encoders
-#     payment_categories = [["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"]]
-#     payment_encoder = OrdinalEncoder(categories=payment_categories)
-#     internet_encoder = OrdinalEncoder(categories=[["No", "DSL", "Fiber optic"]])
-#     contract_encoder = OrdinalEncoder(categories=[["Month-to-month", "One year", "Two year"]])
-
-#     ordinal_pipeline = ColumnTransformer([
-#         ('payment', payment_encoder, ['Payment_Method']),
-#         ('internet', internet_encoder, ['Internet_Service']),
-#         ('contract', contract_encoder, ['Contract'])
-#     ])
-
-#     preprocessor = ColumnTransformer(transformers=[
-#         ('binary', OrdinalEncoder(), binary_cols),
-#         ('service', OrdinalEncoder(), service_cols),
-#         ('ordinal', ordinal_pipeline, ordinal_cols),
-#     ])
-
-#     # Use imblearn Pipeline to include SMOTE
-#     pipeline = Pipeline(steps=[
-#         ('preprocessor', preprocessor),
-#         # ('smote', SMOTE(random_state=42)),
-#         ('classifier', GradientBoostingClassifier())
-#     ])
-
-    
-
-#     pipeline.fit(X_train, y_train)
-
-#     with open('models/churn.pkl', 'wb') as f:
-#         pickle.dump(pipeline, f)
-
-#     print("Model saved as churn_model.pkl")
-    
-
+    print(f"Model saved as {model_path}")
+    return pipeline
