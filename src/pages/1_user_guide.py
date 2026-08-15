@@ -1,89 +1,85 @@
 import streamlit as st
+import pandas as pd
 
-st.set_page_config(page_title=" Churn Prediction Guide", layout="centered")
+st.set_page_config(page_title="Churn Prediction Guide", layout="centered")
 
-st.title(" How to Ask About Churn Prediction")
+st.title("How to Ask About Churn Prediction")
 st.write(
-    "This assistant predicts whether a customer is at risk of churn. "
-    "You can provide details in **natural language** or as **JSON**. "
-    "Use the examples below — each block has a copy button."
+    "You can submit customer information in **natural language** or as **JSON**. "
+    "Unspecified fields will automatically use baseline model defaults."
 )
 
-st.divider()
+st.info(
+    "Tip for best results: Clearly state the attribute names (for example, 'Contract: Month-to-month' "
+    "or 'Tenure: 12 months') to ensure accurate feature extraction."
+)
 
-tab1, tab2, tab3 = st.tabs([" Natural Language Example", " JSON Example", " Field Reference"])
+tab_nl, tab_json, tab_ref = st.tabs(["Natural Language", "JSON Format", "Field Reference"])
 
-with tab1:
-    st.subheader("Natural language prompt (copy & paste)")
-    nl_example = """Can you check if this customer is at risk of churn?
-
-Senior citizen: No
-Married: Yes
-Dependents: No
-Tenure: 5 months
-Internet service: DSL
-Online security: No
-Online backup: Yes
-Device protection: No
-Tech support: No
-Streaming TV: Yes
-Streaming movies: No
-Contract: Month-to-month
-Paperless billing: Yes
-Payment method: Electronic check
-Monthly charges: 75
-Total charges: 350
-"""
+# ---------------------------------------------------------
+# Tab 1: Natural Language Example
+# ---------------------------------------------------------
+with tab_nl:
+    st.caption("Paste into chat or use as a template:")
+    nl_example = """Check churn risk for this customer:
+- Tenure: 5 months
+- Contract: Month-to-month
+- Monthly Charges: 75
+- Internet Service: Fiber optic
+- Tech Support: No
+- Payment Method: Electronic check"""
     st.code(nl_example, language="markdown")
-    st.caption("Tip: Natural language is fine — the app will parse these values into the model format.")
+    st.caption("Note: Using a clear list format ensures reliable entity parsing.")
 
-with tab2:
-    st.subheader("JSON payload (for advanced users)")
+# ---------------------------------------------------------
+# Tab 2: JSON Payload Example
+# ---------------------------------------------------------
+with tab_json:
+    st.caption("Structured key-value format:")
     json_example = """{
-  "Senior_Citizen": 0,
-  "Is_Married": "Yes",
-  "Dependents": "No",
   "tenure": 5,
-  "Internet_Service": "DSL",
-  "Online_Security": "No",
-  "Online_Backup": "Yes",
-  "Device_Protection": "No",
-  "Tech_Support": "No",
-  "Streaming_TV": "Yes",
-  "Streaming_Movies": "No",
   "Contract": "Month-to-month",
-  "Paperless_Billing": "Yes",
+  "Monthly_Charges": 75.0,
+  "Total_Charges": 350.0,
+  "Internet_Service": "Fiber optic",
+  "Tech_Support": "No",
   "Payment_Method": "Electronic check",
-  "Monthly_Charges": 75,
-  "Total_Charges": 350
+  "Paperless_Billing": "Yes"
 }"""
     st.code(json_example, language="json")
-    st.caption("Exactly matches the model’s expected column names and value formats.")
 
-with tab3:
-    st.subheader("Supported Fields & Allowed Values")
-    st.markdown(
-        """
-- **Senior_Citizen**: `0` or `1` *(or “No/Yes” in natural language)*  
-- **Is_Married**: `Yes` / `No`  
-- **Dependents**: `Yes` / `No`  
-- **tenure**: Integer number of months (e.g., `5`)  
-- **Internet_Service**: `No` / `DSL` / `Fiber optic`  
-- **Online_Security**: `Yes` / `No`  
-- **Online_Backup**: `Yes` / `No`  
-- **Device_Protection**: `Yes` / `No`  
-- **Tech_Support**: `Yes` / `No`  
-- **Streaming_TV**: `Yes` / `No`  
-- **Streaming_Movies**: `Yes` / `No`  
-- **Contract**: `Month-to-month` / `One year` / `Two year`  
-- **Paperless_Billing**: `Yes` / `No`  
-- **Payment_Method**: `Electronic check` / `Mailed check` / `Bank transfer (automatic)` / `Credit card (automatic)`  
-- **Monthly_Charges**: Numeric (e.g., `75` or `75.0`)  
-- **Total_Charges**: Numeric (e.g., `350` or `350.0`)  
-"""
-    )
-
-st.divider()
-st.info(
-    "You can use either format. The main assistant page will parse your input and return the prediction and confidence."
-)
+# ---------------------------------------------------------
+# Tab 3: Grouped Field Reference Table
+# ---------------------------------------------------------
+with tab_ref:
+    st.caption("Supported attributes and allowed values:")
+    
+    reference_data = [
+        {
+            "Category": "Core Drivers",
+            "Fields": "Contract, tenure, Monthly_Charges, Total_Charges",
+            "Allowed / Typical Values": "Month-to-month / One year / Two year, Integer months (e.g. 5), Numeric values"
+        },
+        {
+            "Category": "Demographics",
+            "Fields": "Senior_Citizen, Is_Married, Dependents",
+            "Allowed / Typical Values": "Yes / No (or 1 / 0)"
+        },
+        {
+            "Category": "Connectivity",
+            "Fields": "Internet_Service",
+            "Allowed / Typical Values": "DSL, Fiber optic, No"
+        },
+        {
+            "Category": "Add-on Services",
+            "Fields": "Online_Security, Tech_Support, Online_Backup, Device_Protection, Streaming_TV, Streaming_Movies",
+            "Allowed / Typical Values": "Yes / No"
+        },
+        {
+            "Category": "Billing",
+            "Fields": "Payment_Method, Paperless_Billing",
+            "Allowed / Typical Values": "Electronic check, Mailed check, Bank transfer, Credit card | Yes / No"
+        }
+    ]
+    
+    st.dataframe(pd.DataFrame(reference_data), hide_index=True, width='stretch')

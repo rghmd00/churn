@@ -19,6 +19,8 @@ def evaluate(X_test, y_test, model_path='models/churn.pkl'):
     preds = pipeline.predict(X_test)
     probs = pipeline.predict_proba(X_test)[:, 1]
 
+    print(f"############################### Evaluation Report ###############################")
+
     print("Accuracy:", accuracy_score(y_test, preds))
     print("AUC:", roc_auc_score(y_test, probs))
     print(classification_report(y_test, preds))
@@ -27,5 +29,5 @@ def evaluate(X_test, y_test, model_path='models/churn.pkl'):
     # after evaluate() computes preds
     print(confusion_matrix(y_test, preds))
 
-    return preds, 
+    return preds
 
